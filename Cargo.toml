@@ -1,0 +1,9 @@
+[package]
+name = "mqtt-to-delta"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+arrow = "58.1.0"
+chrono = "0.4.44"
+parquet = "58.1.0"
