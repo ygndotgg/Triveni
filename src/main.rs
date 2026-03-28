@@ -1,6 +1,8 @@
 use std::{
+    collections::BTreeMap,
     error::Error,
     fs::{File, OpenOptions},
+    path::Path,
     sync::Arc,
 };
 
@@ -22,6 +24,7 @@ use parquet::{
 };
 
 pub fn main() -> Result<(), Box<dyn Error>> {
+    let mut outputpath = Vec::new();
     let mut batcher = MessageBatcher::default();
     let schema = Arc::new(Schema::new(vec![
         Field::new("device_id", arrow::datatypes::DataType::Utf8, false),
@@ -40,31 +43,37 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             humidity: (i as f64 + 2331.21) as f64,
         };
         if let Some(batch) = batcher.push(k) {
-            let record_batch = build_record_batch(
-                schema.clone(),
-                batch
-                    .iter()
-                    .map(|f| {
-                        (
-                            f.device_id.clone(),
-                            f.ts_ms,
-                            f.temperature,
-                            f.humidity,
-                            f.event_date.clone(),
-                        )
-                    })
-                    .collect(),
-            )?;
-            println!(
-                "Arrow Batch:\tColumns {} \n \t Rows {}",
-                record_batch.num_columns(),
-                record_batch.num_rows()
-            );
-            write_parquet(schema.clone(), &record_batch, "messages.parquet")?;
+            let mut grouped: BTreeMap<String, Vec<TelemetryMessage>> = BTreeMap::new();
+            for msg in batch {
+                grouped.entry(msg.event_date.clone()).or_default().push(msg);
+            }
+            for (event_date, rows) in grouped {
+                let record_batch = build_record_batch(
+                    schema.clone(),
+                    rows.iter()
+                        .map(|f| {
+                            (
+                                f.device_id.clone(),
+                                f.ts_ms,
+                                f.temperature,
+                                f.humidity,
+                                f.event_date.clone(),
+                            )
+                        })
+                        .collect(),
+                )?;
+                let output_path = format!("table/event_date={event_date}/part-00001.parquet");
+
+                write_parquet(schema.clone(), &record_batch, &output_path)?;
+
+                outputpath.push(output_path);
+            }
         }
     }
+    for i in outputpath {
+        print_parquet_metadata(&i)?;
+    }
 
-    print_parquet_metadata("messages.parquet")?;
     Ok(())
 }
 
@@ -126,6 +135,9 @@ fn write_parquet(
     batch: &RecordBatch,
     path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let file = OpenOptions::new().create(true).append(true).open(path)?;
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
