@@ -1,17 +1,14 @@
 use std::{error::Error, sync::Arc};
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
-use deltalake::{
-    DeltaTableBuilder, DeltaTableError, ensure_table_uri,
-    arrow::{
-        array::{ArrayRef, Float64Builder, Int64Builder, RecordBatch, StringBuilder},
-        datatypes::{DataType, Field, Schema},
-    },
-    kernel::{DataType as DeltaDataType, PrimitiveType, StructField},
+use deltalake::arrow::{
+    array::{ArrayRef, Float64Builder, Int64Builder, RecordBatch, StringBuilder},
+    datatypes::{DataType, Field, Schema},
 };
 
 use crate::message::{TelemetryMessage, event_date_from_ts_ms};
 pub use crate::parquet_man::{print_parquet_metadata, write_parquet, write_partitioned_batch};
+use crate::persistence::{DeltaWriteOptions, write_telemetry_batch};
 
 pub fn telemetry_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
@@ -81,52 +78,6 @@ pub fn build_record_batch(
 }
 
 pub async fn write_to_delta(table_path: &str, batch: RecordBatch) -> Result<(), Box<dyn Error>> {
-    let table_uri = ensure_table_uri(table_path)?;
-    let maybe_table = deltalake::open_table(table_uri.clone()).await;
-
-    let table = match maybe_table {
-        Ok(table) => table,
-        Err(DeltaTableError::NotATable(_)) => {
-            let table = DeltaTableBuilder::from_url(table_uri)?.build()?;
-            table
-                .create()
-                .with_columns(delta_columns())
-                .with_partition_columns(["event_date"])
-                .await?
-        }
-        Err(err) => return Err(Box::new(err)),
-    };
-
-    table.write(vec![batch]).await?;
+    write_telemetry_batch(table_path, batch, &DeltaWriteOptions::default()).await?;
     Ok(())
-}
-
-fn delta_columns() -> Vec<StructField> {
-    vec![
-        StructField::new(
-            "device_id".to_string(),
-            DeltaDataType::Primitive(PrimitiveType::String),
-            false,
-        ),
-        StructField::new(
-            "ts_ms".to_string(),
-            DeltaDataType::Primitive(PrimitiveType::Long),
-            false,
-        ),
-        StructField::new(
-            "temperature".to_string(),
-            DeltaDataType::Primitive(PrimitiveType::Double),
-            false,
-        ),
-        StructField::new(
-            "humidity".to_string(),
-            DeltaDataType::Primitive(PrimitiveType::Double),
-            false,
-        ),
-        StructField::new(
-            "event_date".to_string(),
-            DeltaDataType::Primitive(PrimitiveType::String),
-            false,
-        ),
-    ]
 }
