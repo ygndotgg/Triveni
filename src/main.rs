@@ -1,10 +1,10 @@
-use std::{error::Error, path::PathBuf};
+use std::error::Error;
 
 use chrono::Utc;
 use mqtt_to_delta::{
     batcher::MessageBatcher,
     pipeline::{
-        build_record_batch, generate_messages_for_next_days, telemetry_schema, write_to_delete,
+        build_record_batch, generate_messages_for_next_days, telemetry_schema,
         write_to_delta,
     },
 };
@@ -13,9 +13,6 @@ use mqtt_to_delta::{
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut batcher = MessageBatcher::default();
     let schema = telemetry_schema();
-    let table_root = PathBuf::from("table");
-    // let mut written_files = Vec::new();
-    let mut batch_id = 0usize;
 
     for message in generate_messages_for_next_days(Utc::now(), 7, 100)? {
         if let Some(batch) = batcher.push(message) {
@@ -23,10 +20,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             write_to_delta("delta-table", record_batch).await?;
         }
     }
-
-    // for path in &written_files {
-    //     print_parquet_metadata(path)?;
-    // }
 
     Ok(())
 }

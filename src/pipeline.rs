@@ -1,23 +1,13 @@
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fs::{self, File},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{error::Error, sync::Arc};
 
-use arrow::{
-    array::{ArrayRef, Float64Builder, Int64Builder, RecordBatch, StringBuilder},
-    datatypes::{DataType, Field, Schema},
-};
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
-use parquet::{
-    arrow::ArrowWriter,
-    basic::Compression,
-    file::{
-        properties::WriterProperties,
-        reader::{FileReader, SerializedFileReader},
+use deltalake::{
+    DeltaTable, DeltaTableBuilder, DeltaTableError, ensure_table_uri,
+    arrow::{
+        array::{ArrayRef, Float64Builder, Int64Builder, RecordBatch, StringBuilder},
+        datatypes::{DataType, Field, Schema},
     },
+    kernel::{DataType as DeltaDataType, PrimitiveType, StructField},
 };
 
 use crate::message::{TelemetryMessage, event_date_from_ts_ms};
@@ -90,7 +80,54 @@ pub fn build_record_batch(
 }
 
 pub async fn write_to_delta(table_path: &str, batch: RecordBatch) -> Result<(), Box<dyn Error>> {
+    let table_uri = ensure_table_uri(table_path)?;
+    let maybe_table = deltalake::open_table(table_uri.clone()).await;
+
+    let table = match maybe_table {
+        Ok(table) => table,
+        Err(DeltaTableError::NotATable(_)) => {
+            let table = DeltaTableBuilder::from_url(table_uri)?.build()?;
+            table
+                .create()
+                .with_columns(delta_columns())
+                .with_partition_columns(["event_date"])
+                .await?
+        }
+        Err(err) => return Err(Box::new(err)),
+    };
+
+    table.write(vec![batch]).await?;
     Ok(())
+}
+
+fn delta_columns() -> Vec<StructField> {
+    vec![
+        StructField::new(
+            "device_id".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            false,
+        ),
+        StructField::new(
+            "ts_ms".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Long),
+            false,
+        ),
+        StructField::new(
+            "temperature".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Double),
+            false,
+        ),
+        StructField::new(
+            "humidity".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Double),
+            false,
+        ),
+        StructField::new(
+            "event_date".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            false,
+        ),
+    ]
 }
 
 // pub fn write_partitioned_batch(
