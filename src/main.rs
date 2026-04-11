@@ -21,5 +21,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    if let Some(batch) = batcher.flush() {
+        let record_batch = build_record_batch(schema, &batch)?;
+        write_to_delta("delta-table", record_batch).await?;
+    }
+
     Ok(())
 }
