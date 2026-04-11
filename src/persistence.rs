@@ -1,4 +1,4 @@
-use std::{error::Error, fs, num::NonZeroU64};
+use std::{error::Error, fs, num::NonZeroU64, path::PathBuf};
 
 use deltalake::{
     DeltaTable, DeltaTableBuilder, ensure_table_uri,
@@ -55,6 +55,20 @@ pub struct DeltaTableSummary {
     pub version: i64,
     pub active_files: usize,
     pub partition_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeltaActiveFile {
+    pub relative_path: String,
+    pub absolute_path: PathBuf,
+    pub size_bytes: u64,
+    pub event_date: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalDeltaSnapshot {
+    pub summary: DeltaTableSummary,
+    pub active_files: Vec<DeltaActiveFile>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +180,35 @@ pub async fn compact_telemetry_table(
     })
 }
 
+pub async fn load_local_delta_snapshot(
+    table_path: &str,
+) -> Result<LocalDeltaSnapshot, Box<dyn Error>> {
+    let table = open_existing_table(table_path).await?;
+    let summary = summarize_loaded_table(&table)?;
+    let table_root = table
+        .table_url()
+        .to_file_path()
+        .map_err(|_| "load_local_delta_snapshot only supports local file-backed Delta tables")?;
+
+    let mut active_files = Vec::with_capacity(summary.active_files);
+    for path in table.get_files_by_partitions(&[]).await? {
+        let relative_path = path.to_string();
+        let absolute_path = table_root.join(&relative_path);
+        let size_bytes = fs::metadata(&absolute_path)?.len();
+        active_files.push(DeltaActiveFile {
+            event_date: extract_event_date(&relative_path),
+            relative_path,
+            absolute_path,
+            size_bytes,
+        });
+    }
+
+    Ok(LocalDeltaSnapshot {
+        summary,
+        active_files,
+    })
+}
+
 fn summarize_loaded_table(table: &DeltaTable) -> Result<DeltaTableSummary, deltalake::DeltaTableError> {
     let state = table.snapshot()?;
     Ok(DeltaTableSummary {
@@ -233,4 +276,10 @@ fn ensure_local_table_path(table_path: &str) -> Result<(), Box<dyn Error>> {
         fs::create_dir_all(table_path)?;
     }
     Ok(())
+}
+
+fn extract_event_date(relative_path: &str) -> Option<String> {
+    relative_path
+        .split('/')
+        .find_map(|segment| segment.strip_prefix("event_date=").map(ToString::to_string))
 }
