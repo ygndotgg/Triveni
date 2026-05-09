@@ -91,13 +91,12 @@ pub async fn ensure_telemetry_table(
     table_path: &str,
     options: &DeltaWriteOptions,
 ) -> Result<DeltaTable, Box<dyn Error>> {
-    ensure_local_table_path(table_path)?;
     let table_uri = ensure_table_uri(table_path)?;
-
     match deltalake::open_table(table_uri.clone()).await {
         Ok(table) => Ok(table),
         Err(deltalake::DeltaTableError::NotATable(_)) => {
             let create = DeltaTableBuilder::from_url(table_uri)?.build()?.create();
+
             let create = create
                 .with_columns(telemetry_delta_columns())
                 .with_partition_columns(options.partition_columns.clone())
@@ -112,116 +111,17 @@ pub async fn write_telemetry_batch(
     table_path: &str,
     batch: RecordBatch,
     options: &DeltaWriteOptions,
-) -> Result<DeltaWriteOutcome, Box<dyn Error>> {
-    let rows_written = batch.num_rows();
-    let table = ensure_telemetry_table(table_path, options).await?;
+) -> Result<DeltaWriteOptions, Box<dyn Error>> {
+    let rows_writeen = batch.num_rows();
+    let table = ensure
+    unimplemented!()
+}
 
-    let mut write = table
-        .write(vec![batch])
-        .with_partition_columns(options.partition_columns.clone())
-        .with_writer_properties(default_writer_properties());
-
-    if let Some(target_file_size) = options.target_file_size()? {
-        write = write.with_target_file_size(Some(target_file_size));
+fn ensure_local_table_path(table_path: &str) -> Result<(), Box<dyn Error>> {
+    if !table_path.contains("://") {
+        fs::create_dir_all(table_path)?;
     }
-
-    if let Some(write_batch_size) = options.validated_write_batch_size()? {
-        write = write.with_write_batch_size(write_batch_size);
-    }
-
-    let table = write.await?;
-    let summary = summarize_loaded_table(&table)?;
-
-    Ok(DeltaWriteOutcome {
-        table_uri: summary.table_uri,
-        version: summary.version,
-        active_files: summary.active_files,
-        rows_written,
-    })
-}
-
-pub async fn describe_telemetry_table(
-    table_path: &str,
-) -> Result<DeltaTableSummary, Box<dyn Error>> {
-    let table = open_existing_table(table_path).await?;
-    Ok(summarize_loaded_table(&table)?)
-}
-
-pub async fn list_active_file_uris(table_path: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let table = open_existing_table(table_path).await?;
-    Ok(table.get_file_uris()?.collect())
-}
-
-pub async fn compact_telemetry_table(
-    table_path: &str,
-    target_size_bytes: u64,
-) -> Result<DeltaOptimizeOutcome, Box<dyn Error>> {
-    let target_size =
-        NonZeroU64::new(target_size_bytes).ok_or("target_size_bytes must be greater than zero")?;
-    let table = open_existing_table(table_path).await?;
-
-    let (table, metrics) = table
-        .optimize()
-        .with_type(OptimizeType::Compact)
-        .with_target_size(target_size)
-        .await?;
-
-    let summary = summarize_loaded_table(&table)?;
-
-    Ok(DeltaOptimizeOutcome {
-        table_uri: summary.table_uri,
-        version: summary.version,
-        active_files: summary.active_files,
-        num_files_added: metrics.num_files_added,
-        num_files_removed: metrics.num_files_removed,
-        total_files_skipped: metrics.total_files_skipped,
-    })
-}
-
-pub async fn load_local_delta_snapshot(
-    table_path: &str,
-) -> Result<LocalDeltaSnapshot, Box<dyn Error>> {
-    let table = open_existing_table(table_path).await?;
-    let summary = summarize_loaded_table(&table)?;
-    let table_root = table
-        .table_url()
-        .to_file_path()
-        .map_err(|_| "load_local_delta_snapshot only supports local file-backed Delta tables")?;
-
-    let mut active_files = Vec::with_capacity(summary.active_files);
-    for path in table.get_files_by_partitions(&[]).await? {
-        let relative_path = path.to_string();
-        let absolute_path = table_root.join(&relative_path);
-        let size_bytes = fs::metadata(&absolute_path)?.len();
-        active_files.push(DeltaActiveFile {
-            event_date: extract_event_date(&relative_path),
-            relative_path,
-            absolute_path,
-            size_bytes,
-        });
-    }
-
-    Ok(LocalDeltaSnapshot {
-        summary,
-        active_files,
-    })
-}
-
-fn summarize_loaded_table(
-    table: &DeltaTable,
-) -> Result<DeltaTableSummary, deltalake::DeltaTableError> {
-    let state = table.snapshot()?;
-    Ok(DeltaTableSummary {
-        table_uri: table.table_url().to_string(),
-        version: state.version(),
-        active_files: state.log_data().num_files(),
-        partition_columns: state.metadata().partition_columns().to_vec(),
-    })
-}
-
-async fn open_existing_table(table_path: &str) -> Result<DeltaTable, Box<dyn Error>> {
-    let table_uri = ensure_table_uri(table_path)?;
-    Ok(deltalake::open_table(table_uri).await?)
+    Ok(())
 }
 
 fn telemetry_delta_columns() -> Vec<StructField> {
@@ -263,23 +163,4 @@ fn table_configuration(options: &DeltaWriteOptions) -> Vec<(String, Option<Strin
         ));
     }
     configuration
-}
-
-fn default_writer_properties() -> WriterProperties {
-    WriterProperties::builder()
-        .set_compression(Compression::SNAPPY)
-        .build()
-}
-
-fn ensure_local_table_path(table_path: &str) -> Result<(), Box<dyn Error>> {
-    if !table_path.contains("://") {
-        fs::create_dir_all(table_path)?;
-    }
-    Ok(())
-}
-
-fn extract_event_date(relative_path: &str) -> Option<String> {
-    relative_path
-        .split('/')
-        .find_map(|segment| segment.strip_prefix("event_date=").map(ToString::to_string))
 }

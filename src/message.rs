@@ -24,13 +24,17 @@ impl fmt::Display for TelemetryMessage {
         write!(
             f,
             "TelemetryMessage[id:{},tms:{},temp:{:.2},humd:{:.2}]",
-            self.device_id, self.ts_ms, self.temperature, self.humidity,
+            self.device_id, self.ts_ms, self.temperature, self.humidity
         )
     }
 }
 
 pub fn event_date_from_ts_ms(ts_ms: i64) -> Result<String, String> {
-    let dt: DateTime<Utc> = DateTime::from_timestamp_millis(ts_ms)
-        .ok_or_else(|| format!("invalid timeestamp millis:{ts_ms}"))?;
+    let dt: DateTime<Utc> = DateTime::from_timestamp_millis(ts_ms).ok_or_else(|| {
+        format!(
+            "invalid
+        timestamp millis:{ts_ms}"
+        )
+    })?;
     Ok(dt.format("%Y-%m-%d").to_string())
 }
